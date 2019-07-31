@@ -477,6 +477,9 @@ func (b *RDSBroker) Bind(
 		if err := decoder.Decode(&bindParameters); err != nil {
 			return bindingResponse, err
 		}
+		if err := bindParameters.Validate(); err != nil {
+			return bindingResponse, err
+		}
 	}
 
 	_, ok := b.catalog.FindService(details.ServiceID)
