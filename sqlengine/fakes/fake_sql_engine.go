@@ -1,6 +1,7 @@
 package fakes
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/alphagov/paas-rds-broker/sqlengine"
@@ -58,7 +59,7 @@ func (f *FakeSQLEngine) Close() {
 	f.CloseCalled = true
 }
 
-func (f *FakeSQLEngine) CreateUser(bindingID, dbname string) (username, password string, err error) {
+func (f *FakeSQLEngine) CreateUser(bindingID, dbname string, userBindParametersRaw *json.RawMessage) (username, password string, err error) {
 	f.CreateUserCalled = true
 	f.CreateUserBindingID = bindingID
 	f.CreateUserDBName = dbname

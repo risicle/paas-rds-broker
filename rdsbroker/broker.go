@@ -477,9 +477,9 @@ func (b *RDSBroker) Bind(
 		if err := decoder.Decode(&bindParameters); err != nil {
 			return bindingResponse, err
 		}
-		if err := bindParameters.Validate(); err != nil {
-			return bindingResponse, err
-		}
+// 		if err := bindParameters.Validate(); err != nil {
+// 			return bindingResponse, err
+// 		}
 	}
 
 	_, ok := b.catalog.FindService(details.ServiceID)
@@ -519,7 +519,7 @@ func (b *RDSBroker) Bind(
 	}
 	defer sqlEngine.Close()
 
-	dbUsername, dbPassword, err := sqlEngine.CreateUser(bindingID, dbName)
+	dbUsername, dbPassword, err := sqlEngine.CreateUser(bindingID, dbName, bindParameters.User)
 	if err != nil {
 		return bindingResponse, err
 	}

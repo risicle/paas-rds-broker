@@ -3,11 +3,14 @@ package sqlengine
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/url"
+	"strings"
 	"text/template"
 	"time"
+	"unicode"
 
 	"github.com/lib/pq" // PostgreSQL Driver
 
@@ -20,6 +23,243 @@ const (
 	pqErrInternalError    = "XX000"
 	pqErrInvalidPassword  = "28P01"
 )
+
+type PostgresqlPrivilege struct {
+	TargetType   string    `json:"target_type"`
+	TargetSchema *string   `json:"target_schema"`
+	TargetName   *string   `json:"target_name"`
+	Privilege    string    `json:"privilege"`
+	ColumnNames  *[]string `json:"column_names"`
+}
+
+func (pp *PostgresqlPrivilege) Validate() error {
+	switch strings.ToUpper(pp.TargetType) {
+		case "TABLE":
+			if pp.TargetName == nil || *pp.TargetName == "" {
+				return fmt.Errorf("Must provide a non-empty target_name for 'TABLE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			if err := ValidatePostgresqlName(*pp.TargetName); err != nil {
+				return err
+			}
+
+			if pp.TargetSchema != nil && *pp.TargetSchema != "" {
+				if err := ValidatePostgresqlName(*pp.TargetSchema); err != nil {
+					return err
+				}
+			}
+
+			if pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
+				for _, columnName := range *pp.ColumnNames {
+					if err := ValidatePostgresqlName(columnName); err != nil {
+						return err
+					}
+				}
+
+				switch strings.ToUpper(pp.Privilege) {
+					case "SELECT":
+					case "INSERT":
+					case "UPDATE":
+					case "REFERENCES":
+					case "ALL":
+					default:
+						return fmt.Errorf("Unknown postgresql column privilege: %s", pp.Privilege)
+				}
+			} else {
+				switch strings.ToUpper(pp.Privilege) {
+					case "SELECT":
+					case "INSERT":
+					case "UPDATE":
+					case "DELETE":
+					case "TRUNCATE":
+					case "REFERENCES":
+					case "TRIGGER":
+					case "ALL":
+					default:
+						return fmt.Errorf("Unknown postgresql table privilege: %s", pp.Privilege)
+				}
+			}
+		case "SEQUENCE":
+			if pp.TargetName == nil || *pp.TargetName == "" {
+				return fmt.Errorf("Must provide a non-empty target_name for 'SEQUENCE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			if err := ValidatePostgresqlName(*pp.TargetName); err != nil {
+				return err
+			}
+
+			if pp.TargetSchema != nil && *pp.TargetSchema != "" {
+				if err := ValidatePostgresqlName(*pp.TargetSchema); err != nil {
+					return err
+				}
+			}
+
+			if pp.ColumnNames != nil {
+				return fmt.Errorf("column_names makes no sense for 'SEQUENCE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			switch strings.ToUpper(pp.Privilege) {
+				case "USAGE":
+				case "SELECT":
+				case "UPDATE":
+				case "ALL":
+				default:
+					return fmt.Errorf("Unknown postgresql sequence privilege: %s", pp.Privilege)
+			}
+		case "DATABASE":
+			if pp.TargetName != nil {
+				return fmt.Errorf("target_name makes no sense for 'DATABASE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			if pp.TargetSchema != nil {
+				return fmt.Errorf("target_schema makes no sense for 'DATABASE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			if pp.ColumnNames != nil {
+				return fmt.Errorf("column_names makes no sense for 'DATABASE' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			switch strings.ToUpper(pp.Privilege) {
+				case "CREATE":
+				case "TEMPORARY":
+				case "TEMP":
+				case "ALL":
+				default:
+					return fmt.Errorf("Unknown postgresql database privilege: %s", pp.Privilege)
+			}
+		case "SCHEMA":
+			if pp.TargetName == nil || *pp.TargetName == "" {
+				return fmt.Errorf("Must provide a non-empty target_name for 'SCHEMA' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			if err := ValidatePostgresqlName(*pp.TargetName); err != nil {
+				return err
+			}
+
+			if pp.TargetSchema != nil {
+				return fmt.Errorf("target_schema makes no sense for 'SCHEMA' postgresql privilege target_type (try target_name instead) (%+v)", *pp)
+			}
+
+			if pp.ColumnNames != nil {
+				return fmt.Errorf("column_names makes no sense for 'SCHEMA' postgresql privilege target_type (%+v)", *pp)
+			}
+
+			switch strings.ToUpper(pp.Privilege) {
+				case "CREATE":
+				case "USAGE":
+				case "ALL":
+				default:
+					return fmt.Errorf("Unknown postgresql schema privilege: %s", pp.Privilege)
+			}
+		default:
+			return fmt.Errorf("Unknown postgresql privilege target_type: %s", pp.TargetType)
+	}
+
+	return nil
+}
+
+func getQuotedIdents(schema *string, name string) (text string, parameters string[]) {
+	if schema == nil || *schema == "" {
+		return "quote_ident(?)", []string{name}
+	}
+
+	return "quote_ident(?) || '.' || quote_ident(?)", []string{*schema, name}
+}
+
+const privilegeStatementWrapper = `
+	BEGIN
+		%s
+	EXCEPTION
+		WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
+			NULL;
+	END;`
+
+func (pp *PostgresqlPrivilege) GetPlPgSQL(action string, user string) (text string, parameters []string, error) {
+	switch action {
+		case "GRANT":
+		case "REVOKE":
+		default:
+			return "", []string{}, fmt.Errorf("Expected 'action' to be one of GRANT or REVOKE, not '%s'", action)
+	}
+
+	if strings.ToUpper(pp.TargetType) == "TABLE" && pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
+		columnQuoteIdents := make(string[], len(*pp.ColumnNames))
+		for i := range columnQuoteIdents {
+			columnQuoteIdents[i] = "quote_ident(?)"
+		}
+
+		return Sprintf(
+			"EXECUTE '%s %s (' || %s || ') ON TABLE ' || %s || ' TO ' || quote_ident(?);",
+			action,
+			pp.Privilege,
+			strings.Join(columnQuoteIdents, ", "),
+			getQuotedIdents(pp.TargetSchema, pp.TargetName),
+		), 
+	}
+}
+
+func ValidatePostgresqlName(name string) error {
+	if len(name) == 0 {
+		return fmt.Errorf("Empty name")
+	}
+
+	for i := 0; i < len(name); i++ {
+		if name[i] > unicode.MaxASCII {
+			return fmt.Errorf("Non-ASCII characters in postgresql object names not (yet) supported: %s", name)
+		}
+	}
+
+	return nil
+}
+
+type PostgresUserBindParameters struct {
+	IsOwner                *bool                  `json:"is_owner"`
+	DefaultPrivilegePolicy string                 `json:"default_privilege_policy"`
+	RevokePrivileges       *[]PostgresqlPrivilege `json:"revoke_privileges"`
+	GrantPrivileges        *[]PostgresqlPrivilege `json:"grant_privileges"`
+}
+
+func (bp *PostgresUserBindParameters) Validate() error {
+	if bp.IsOwner != nil && !*bp.IsOwner {
+		switch strings.ToLower(bp.DefaultPrivilegePolicy) {
+			case "revoke":
+				if bp.RevokePrivileges != nil {
+					return fmt.Errorf("revoke_privileges makes no sense with default_privilege_policy 'revoke' (%+v)", *bp)
+				}
+				if bp.GrantPrivileges != nil {
+					for _, privilege := range *bp.GrantPrivileges {
+						if err := privilege.Validate(); err != nil {
+							return err
+						}
+					}
+				}
+			case "grant":
+				if bp.GrantPrivileges != nil {
+					return fmt.Errorf("grant_privileges makes no sense with default_privilege_policy 'grant' (%+v)", *bp)
+				}
+				if bp.RevokePrivileges != nil {
+					for _, privilege := range *bp.RevokePrivileges {
+						if err := privilege.Validate(); err != nil {
+							return err
+						}
+					}
+				}
+			default:
+				return fmt.Errorf("default_privilege_policy must be one of 'grant' or 'revoke' (%+v)", *bp)
+		}
+	} else {
+		if bp.DefaultPrivilegePolicy != "" {
+			return fmt.Errorf("postgresql_user.default_privilege_policy makes no sense for owner (%+v)", *bp)
+		}
+		if bp.RevokePrivileges != nil {
+			return fmt.Errorf("postgresql_user.revoke_privileges makes no sense for owner (%+v)", *bp)
+		}
+		if bp.GrantPrivileges != nil {
+			return fmt.Errorf("postgresql_user.grant_privileges makes no sense for owner (%+v)", *bp)
+		}
+	}
+	return nil
+}
 
 type PostgresEngine struct {
 	logger            lager.Logger
@@ -70,7 +310,56 @@ func (d *PostgresEngine) Close() {
 	}
 }
 
-func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string) (username, password string, err error) {
+const grantAllPrivilegesPattern = `
+	DO
+	$body$
+	BEGIN
+		FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
+			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
+			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
+		END LOOP;
+
+		GRANT ALL ON DATABASE "{{,dbname}}" TO "{{.user}}";
+
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO "{{.user}}";
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO "{{.user}}";
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO "{{.user}}";
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO "{{.user}}";
+	END
+	$body$;`
+
+var grantAllPrivilegesTemplate = template.Must(template.New("grantAllPrivileges").Parse(grantAllPrivilegesPattern))
+
+const grantUnhandledPrivilegesPattern = `
+	DO
+	$body$
+	BEGIN
+		FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
+		END LOOP;
+
+		FOR type_schema, type_name IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
+			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(type_schema) || '.' || quote_ident(type_name) || ' TO "{{.user}}';
+		END LOOP;
+
+		FOR domain_schema, domain_name IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
+			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(domain_schema) || '.' || quote_ident(domain_name) || ' TO "{{.user}}';
+		END LOOP;
+
+		FOR lang_name IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
+			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(lang_name) || ' TO "{{.user}}"';
+		END LOOP;
+
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO "{{.user}}";
+		ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO "{{.user}}";
+	END
+	$body$;`
+
+var grantUnhandledPrivilegesTemplate = template.Must(template.New("grantUnhandledPrivileges").Parse(grantUnhandledPrivilegesPattern))
+
+func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, userBindParameters PostgresUserBindParameters) (username, password string, err error) {
 	groupname := d.generatePostgresGroup(dbname)
 
 	if err = d.ensureGroup(tx, dbname, groupname); err != nil {
@@ -88,12 +377,40 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string) (u
 		return "", "", err
 	}
 
-	grantPrivilegesStatement := fmt.Sprintf(`grant "%s" to "%s"`, groupname, username)
-	d.logger.Debug("grant-privileges", lager.Data{"statement": grantPrivilegesStatement})
+	if userBindParameters.IsOwner == nil || *userBindParameters.IsOwner {
+		grantMembershipStatement := fmt.Sprintf(`grant "%s" to "%s"`, groupname, username)
+		d.logger.Debug("grant-privileges", lager.Data{"statement": grantMembershipStatement})
 
-	if _, err := tx.Exec(grantPrivilegesStatement); err != nil {
-		d.logger.Error("Grant sql-error", err)
-		return "", "", err
+		if _, err := tx.Exec(grantMembershipStatement); err != nil {
+			d.logger.Error("Grant sql-error", err)
+			return "", "", err
+		}
+	} else {
+		if strings.ToLower(userBindParameters.DefaultPrivilegePolicy) != "deny" {
+			// grant priviliges to all objects which can then be revoked individually
+			var grantAllPrivilegesStatement bytes.Buffer
+			grantAllPrivilegesTemplate.Execute(&grantAllPrivilegesStatement, map[string]string{
+				"dbname": dbname,
+				"user": username,
+			})
+
+			if _, err := tx.Exec(grantAllPrivilegesStatement); err != nil {
+				d.logger.Error("Grant sql-error", err)
+				return "", "", err
+			}
+		}
+
+		// we don't implement a way to further control some types of privilege, so for these features to be at all
+		// usable by a non-owner user, we need to allow all of them
+		var grantUnhandledPrivilegesStatement bytes.Buffer
+		grantUnhandledPrivilegesTemplate.Execute(&grantUnhandledPrivilegesStatement, map[string]string{
+			"user": username,
+		})
+
+		if _, err := tx.Exec(grantUnhandledPrivilegesStatement); err != nil {
+			d.logger.Error("Grant sql-error", err)
+			return "", "", err
+		}
 	}
 
 	grantAllOnDatabaseStatement := fmt.Sprintf(`grant all privileges on database "%s" to "%s"`, dbname, groupname)
@@ -107,13 +424,13 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string) (u
 	return username, password, nil
 }
 
-func (d *PostgresEngine) createUser(bindingID, dbname string) (username, password string, err error) {
+func (d *PostgresEngine) createUser(bindingID, dbname string, userBindParameters PostgresUserBindParameters) (username, password string, err error) {
 	tx, err := d.db.Begin()
 	if err != nil {
 		d.logger.Error("sql-error", err)
 		return "", "", err
 	}
-	username, password, err = d.execCreateUser(tx, bindingID, dbname)
+	username, password, err = d.execCreateUser(tx, bindingID, dbname, userBindParameters)
 	if err != nil {
 		_ = tx.Rollback()
 		return "", "", err
@@ -121,12 +438,24 @@ func (d *PostgresEngine) createUser(bindingID, dbname string) (username, passwor
 	return username, password, tx.Commit()
 }
 
-func (d *PostgresEngine) CreateUser(bindingID, dbname string) (username, password string, err error) {
+func (d *PostgresEngine) CreateUser(bindingID, dbname string, userBindParametersRaw *json.RawMessage) (username, password string, err error) {
+	bindParameters := PostgresUserBindParameters{}
+	if userBindParametersRaw != nil && len(*userBindParametersRaw) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(*userBindParametersRaw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&bindParameters); err != nil {
+			return "", "", err
+		}
+		if err := bindParameters.Validate(); err != nil {
+			return "", "", err
+		}
+	}
+
 	var pqErr *pq.Error
 	tries := 0
 	for tries < 10 {
 		tries++
-		username, password, err := d.createUser(bindingID, dbname)
+		username, password, err := d.createUser(bindingID, dbname, bindParameters)
 		if err != nil {
 			var ok bool
 			pqErr, ok = err.(*pq.Error)
