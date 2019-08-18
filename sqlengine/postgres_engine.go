@@ -158,12 +158,12 @@ func (pp *PostgresqlPrivilege) Validate() error {
 	return nil
 }
 
-func getQuotedIdents(schema *string, name string) (text string, parameters string[]) {
+func getQuotedIdents(schema *string, name string) (text string, parameters []interface{}) {
 	if schema == nil || *schema == "" {
-		return "quote_ident(?)", []string{name}
+		return "quote_ident(?)", []interface{}{name}
 	}
 
-	return "quote_ident(?) || '.' || quote_ident(?)", []string{*schema, name}
+	return "quote_ident(?) || '.' || quote_ident(?)", []interface{}{*schema, name}
 }
 
 const privilegeStatementWrapper = `
@@ -174,28 +174,87 @@ const privilegeStatementWrapper = `
 			NULL;
 	END;`
 
-func (pp *PostgresqlPrivilege) GetPlPgSQL(action string, user string) (text string, parameters []string, error) {
+func (pp *PostgresqlPrivilege) GetPlPgSQL(action string, user string) (text string, parameters []interface{}, err error) {
 	switch action {
 		case "GRANT":
 		case "REVOKE":
 		default:
-			return "", []string{}, fmt.Errorf("Expected 'action' to be one of GRANT or REVOKE, not '%s'", action)
+			return "", []interface{}{}, fmt.Errorf("Expected 'action' to be one of GRANT or REVOKE, not '%s'", action)
 	}
 
 	if strings.ToUpper(pp.TargetType) == "TABLE" && pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
-		columnQuoteIdents := make(string[], len(*pp.ColumnNames))
+		columnQuoteIdents := make([]string, len(*pp.ColumnNames))
 		for i := range columnQuoteIdents {
 			columnQuoteIdents[i] = "quote_ident(?)"
 		}
 
-		return Sprintf(
-			"EXECUTE '%s %s (' || %s || ') ON TABLE ' || %s || ' TO ' || quote_ident(?);",
+		tableQuotedIdents, tableQuotedIdentsParameters := getQuotedIdents(pp.TargetSchema, *pp.TargetName)
+		parameters := make([]interface{}, len(*pp.ColumnNames) + len(tableQuotedIdentsParameters) + 1)
+		for i, col := range *pp.ColumnNames {
+			parameters[i] = col
+		}
+
+		return fmt.Sprintf(
+			privilegeStatementWrapper,
+			fmt.Sprintf(
+				"EXECUTE '%s %s (' || %s || ') ON %s ' || %s || ' TO ' || quote_ident(?);",
+				action,
+				pp.Privilege,
+				strings.Join(columnQuoteIdents, ", "),
+				pp.TargetType,
+				tableQuotedIdents,
+			),
+		), append(
+			append(
+				parameters,
+				tableQuotedIdentsParameters...
+			),
+			user,
+		), nil
+	}
+	if strings.ToUpper(pp.TargetType) == "DATABASE" {
+		return fmt.Sprintf(
+			privilegeStatementWrapper,
+			fmt.Sprintf(
+				"EXECUTE '%s %s ON %s TO ' || quote_ident(?);",
+				action,
+				pp.Privilege,
+				pp.TargetType,
+			),
+		), []interface{}{
+			user,
+		}, nil
+	}
+	if strings.ToUpper(pp.TargetType) == "SCHEMA" {
+		return fmt.Sprintf(
+			privilegeStatementWrapper,
+			fmt.Sprintf(
+				"EXECUTE '%s %s ON %s ' || quote_ident(?) || ' TO ' || quote_ident(?);",
+				action,
+				pp.Privilege,
+				pp.TargetType,
+			),
+		), []interface{}{
+			*pp.TargetName,
+			user,
+		}, nil
+	}
+
+	targetQuotedIdents, targetQuotedIdentsParameters := getQuotedIdents(pp.TargetSchema, *pp.TargetName)
+
+	return fmt.Sprintf(
+		privilegeStatementWrapper,
+		fmt.Sprintf(
+			"EXECUTE '%s %s ON %s ' || %s || ' TO ' || quote_ident(?);",
 			action,
 			pp.Privilege,
-			strings.Join(columnQuoteIdents, ", "),
-			getQuotedIdents(pp.TargetSchema, pp.TargetName),
-		), 
-	}
+			pp.TargetType,
+			targetQuotedIdents,
+		),
+	), append(
+		targetQuotedIdentsParameters,
+		user,
+	), nil
 }
 
 func ValidatePostgresqlName(name string) error {
@@ -321,7 +380,7 @@ const grantAllPrivilegesPattern = `
 			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(schema_name) || ' TO "{{.user}}"';
 		END LOOP;
 
-		GRANT ALL ON DATABASE "{{,dbname}}" TO "{{.user}}";
+		GRANT ALL ON DATABASE "{{.dbname}}" TO "{{.user}}";
 
 		ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO "{{.user}}";
 		ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO "{{.user}}";
@@ -359,6 +418,15 @@ const grantUnhandledPrivilegesPattern = `
 
 var grantUnhandledPrivilegesTemplate = template.Must(template.New("grantUnhandledPrivileges").Parse(grantUnhandledPrivilegesPattern))
 
+const privilegeWrapper = `
+	DO
+	$body$
+	BEGIN
+		%s
+	END
+	$body$
+	`
+
 func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, userBindParameters PostgresUserBindParameters) (username, password string, err error) {
 	groupname := d.generatePostgresGroup(dbname)
 
@@ -386,6 +454,8 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 			return "", "", err
 		}
 	} else {
+		var privs *[]PostgresqlPrivilege
+		var privsAction string
 		if strings.ToLower(userBindParameters.DefaultPrivilegePolicy) != "deny" {
 			// grant priviliges to all objects which can then be revoked individually
 			var grantAllPrivilegesStatement bytes.Buffer
@@ -394,10 +464,16 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 				"user": username,
 			})
 
-			if _, err := tx.Exec(grantAllPrivilegesStatement); err != nil {
+			if _, err := tx.Exec(grantAllPrivilegesStatement.String()); err != nil {
 				d.logger.Error("Grant sql-error", err)
 				return "", "", err
 			}
+
+			privs = userBindParameters.RevokePrivileges
+			privsAction = "REVOKE"
+		} else {
+			privs = userBindParameters.GrantPrivileges
+			privsAction = "GRANT"
 		}
 
 		// we don't implement a way to further control some types of privilege, so for these features to be at all
@@ -407,9 +483,28 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 			"user": username,
 		})
 
-		if _, err := tx.Exec(grantUnhandledPrivilegesStatement); err != nil {
+		if _, err := tx.Exec(grantUnhandledPrivilegesStatement.String()); err != nil {
 			d.logger.Error("Grant sql-error", err)
 			return "", "", err
+		}
+
+		if privs != nil && len(*privs) > 0 {
+			var privsBuilder strings.Builder
+			var privsParameters []interface{}
+			for _, priv := range *privs {
+				privPlPgSQL, privParameters, err := priv.GetPlPgSQL(privsAction, username)
+				if err != nil {
+					return "", "", err
+				}
+
+				privsBuilder.WriteString(privPlPgSQL)
+				privsParameters = append(privsParameters, privParameters...)
+			}
+
+			if _, err := tx.Exec(fmt.Sprintf(privilegeWrapper, privsBuilder.String()), privsParameters...); err != nil {
+				d.logger.Error("Grant sql-error", err)
+				return "", "", err
+			}
 		}
 	}
 
