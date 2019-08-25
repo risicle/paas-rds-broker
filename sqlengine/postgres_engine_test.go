@@ -235,89 +235,258 @@ var _ = Describe("PostgresEngine", func() {
 			bindingID = "binding-id" + randomTestSuffix
 			err := postgresEngine.Open(address, port, dbname, masterUsername, masterPassword)
 			Expect(err).ToNot(HaveOccurred())
-
-			createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, nil)
-			Expect(err).ToNot(HaveOccurred())
 		})
 
-		AfterEach(func() {
-			err := postgresEngine.DropUser(bindingID)
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("CreateUser() returns valid credentials", func() {
-			connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
-			db, err := sql.Open("postgres", connectionString)
-			Expect(err).ToNot(HaveOccurred())
-			defer db.Close()
-			err = db.Ping()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("creates a user with the necessary permissions on the database", func() {
-			connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
-			db, err := sql.Open("postgres", connectionString)
-			Expect(err).ToNot(HaveOccurred())
-			defer db.Close()
-
-			_, err = db.Exec("CREATE TABLE foo (col CHAR(8))")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("INSERT INTO foo (col) VALUES ('value')")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("CREATE SCHEMA bar")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("CREATE TABLE bar.baz (col CHAR(8))")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("INSERT INTO bar.baz (col) VALUES ('other')")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("DROP TABLE bar.baz")
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = db.Exec("DROP SCHEMA bar CASCADE")
-			Expect(err).ToNot(HaveOccurred())
-
-		})
-
-		Context("When there are two different bindings", func() {
-			var (
-				otherBindingID       string
-				otherCreatedUser     string
-				otherCreatedPassword string
-			)
-
+		Context("Without userBindParameters supplied", func() {
 			BeforeEach(func() {
 				var err error
-				otherBindingID = "other-binding-id" + randomTestSuffix
-				otherCreatedUser, otherCreatedPassword, err = postgresEngine.CreateUser(otherBindingID, dbname, nil)
+				createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, nil)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
 			AfterEach(func() {
-				err := postgresEngine.DropUser(otherBindingID)
+				err := postgresEngine.DropUser(bindingID)
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("CreateUser() returns different user and password", func() {
-				fmt.Sprintf("created user: '%s' Other created user: '%s'", createdUser, otherCreatedUser)
-				Expect(otherCreatedUser).ToNot(Equal(createdUser))
-				fmt.Sprintf("created user: '%s' Other created user: '%s'", createdUser, otherCreatedUser)
-				Expect(otherCreatedPassword).ToNot(Equal(createdPassword))
+			It("CreateUser() returns valid credentials", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+				err = db.Ping()
+				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("Tables created by one binding can be accessed and deleted by other", func() {
-				connectionString1 := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
-				connectionString2 := postgresEngine.URI(address, port, dbname, otherCreatedUser, otherCreatedPassword)
-				createObjects(connectionString1, "table1")
-				accessAndDeleteObjects(connectionString2, "table1")
-				createObjects(connectionString2, "table2")
-				accessAndDeleteObjects(connectionString1, "table2")
+			It("creates a user with the necessary permissions on the database", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("CREATE TABLE foo (col CHAR(8))")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("INSERT INTO foo (col) VALUES ('value')")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("CREATE SCHEMA bar")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("CREATE TABLE bar.baz (col CHAR(8))")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("INSERT INTO bar.baz (col) VALUES ('other')")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("DROP TABLE bar.baz")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("DROP SCHEMA bar CASCADE")
+				Expect(err).ToNot(HaveOccurred())
+
+			})
+
+			Context("When there are two different bindings", func() {
+				var (
+					otherBindingID       string
+					otherCreatedUser     string
+					otherCreatedPassword string
+				)
+
+				BeforeEach(func() {
+					var err error
+					otherBindingID = "other-binding-id" + randomTestSuffix
+					otherCreatedUser, otherCreatedPassword, err = postgresEngine.CreateUser(otherBindingID, dbname, nil)
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				AfterEach(func() {
+					err := postgresEngine.DropUser(otherBindingID)
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				It("CreateUser() returns different user and password", func() {
+					fmt.Sprintf("created user: '%s' Other created user: '%s'", createdUser, otherCreatedUser)
+					Expect(otherCreatedUser).ToNot(Equal(createdUser))
+					fmt.Sprintf("created user: '%s' Other created user: '%s'", createdUser, otherCreatedUser)
+					Expect(otherCreatedPassword).ToNot(Equal(createdPassword))
+				})
+
+				It("Tables created by one binding can be accessed and deleted by other", func() {
+					connectionString1 := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+					connectionString2 := postgresEngine.URI(address, port, dbname, otherCreatedUser, otherCreatedPassword)
+					createObjects(connectionString1, "table1")
+					accessAndDeleteObjects(connectionString2, "table1")
+					createObjects(connectionString2, "table2")
+					accessAndDeleteObjects(connectionString1, "table2")
+				})
 			})
 		})
+
+		Context("With invalid userBindParameters supplied", func() {
+			It("Returns an error for invalid json in userBindParameters", func() {
+				_, _, err := postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": true,, "grant_privileges": null}`))
+				Expect(err).To(MatchError(ContainSubstring(`invalid character`)))
+			})
+
+			It("Returns an error when unable to unmarshal userBindParameters", func() {
+				_, _, err := postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": 123}`))
+				Expect(err).To(MatchError(ContainSubstring(`number`)))
+			})
+
+			It("Returns an error when userBindParameters fails validation", func() {
+				_, _, err := postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": false, "default_privilege_policy": "grunt"}`))
+				Expect(err).To(MatchError(ContainSubstring(`default_privilege_policy must be one of 'grant' or 'revoke'`)))
+			})
+		})
+// 				// is_owner is default true
+// 				_, _, err = postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"revoke_privileges": []}`))
+// 				Expect(err).To(MatchError(ContainSubstring(`postgresql_user.revoke_privileges makes no sense for owner`)))
+// 
+// 				_, _, err = postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": true, "default_privilege_policy": "grant"}`))
+// 				Expect(err).To(MatchError(ContainSubstring(`postgresql_user.default_privilege_policy makes no sense for owner`)))
+// 			})
+/*
+			It("returns an error for unexpected default_privilege_policy", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "perhaps"}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`default_privilege_policy must be one of 'grant' or 'revoke'`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error for a privileges list clashing with default_privilege_policy", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "grant_privileges": []}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`grant_privileges makes no sense with default_privilege_policy 'grant'`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "revoke_privileges": []}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`revoke_privileges makes no sense with default_privilege_policy 'revoke'`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error for unknown privilege target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "foo"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql privilege target_type: foo`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if no target_name supplied with TABLE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Must provide a non-empty target_name for 'TABLE' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if an invalid target_name or schema_name is supplied with TABLE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table", "target_name": "foo \" bar", "privilege": "select"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Double-quotes in postgresql object names not allowed`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table", "target_name": "bar ✈"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Non-ASCII characters in postgresql object names not (yet) supported`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table", "target_name": "something;valid", "target_schema": "in✈valid"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Non-ASCII characters in postgresql object names not (yet) supported`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if invalid column_names are supplied with TABLE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table", "target_name": "some_table", "column_names": ["valid 123", "invalid \"456"], "privilege": "select"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Double-quotes in postgresql object names not allowed`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if column_names are specified with privileges inapplicable to a column", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "table", "target_name": "some_table", "column_names": ["valid 123"], "privilege": "delete"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql column privilege: delete`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if inappropriate options are specified with SEQUENCE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "sequence", "target_name": "valid", "target_schema": "invalid✈", "privilege": "all"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Non-ASCII characters in postgresql object names not (yet) supported: invalid✈`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "sequence", "target_name": "valid", "column_names": ["123"], "privilege": "all"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`column_names makes no sense for 'SEQUENCE' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if an inappropriate privilege is specified with SEQUENCE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "sequence", "target_name": "valid", "target_schema": "also valid", "privilege": "INSERT"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql sequence privilege: INSERT`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if inappropriate options are specified with DATABASE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [{"target_type": "database", "target_name": "irrelevant", "privilege": "all"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`target_name makes no sense for 'DATABASE' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [{"target_type": "database", "target_schema": "irrelevant", "privilege": "all"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`target_schema makes no sense for 'DATABASE' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [{"target_type": "database", "column_names": [], "privilege": "all"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`column_names makes no sense for 'DATABASE' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if an inappropriate privilege is specified with DATABASE target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "database", "privilege": "DELETE"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql database privilege: DELETE`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if no target_name supplied with SCHEMA target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [{"target_type": "schema", "privilege": "all"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Must provide a non-empty target_name for 'SCHEMA' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if invalid target_name supplied with SCHEMA target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [{"target_type": "schema", "privilege": "all", "target_name": "\"invalid\""}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Double-quotes in postgresql object names not allowed`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if inappropriate options are specified with SCHEMA target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "schema", "target_name":"foo", "target_schema": "bar", "privilege": "ALL"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`target_schema makes no sense for 'SCHEMA' postgresql privilege target_type (try target_name instead)`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "schema", "target_name":"foo", "column_names": ["bar"], "privilege": "ALL"}]}}`)
+				_, err = rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`column_names makes no sense for 'SCHEMA' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})
+
+			It("returns an error if an inappropriate privilege is specified with SCHEMA target_type", func() {
+				bindDetails.RawParameters = json.RawMessage(`{"postgresql_user": {"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [{"target_type": "schema", "privilege": "foo bar"}]}}`)
+				_, err := rdsBroker.Bind(ctx, instanceID, bindingID, bindDetails)
+				Expect(err).To(MatchError(ContainSubstring(`Must provide a non-empty target_name for 'SCHEMA' postgresql privilege target_type`)))
+				Expect(sqlProvider.GetSQLEngineCalled).To(BeFalse())
+			})*/
 	})
 
 	Describe("DropUser", func() {

@@ -156,7 +156,10 @@ const privilegeStatementWrapper = `BEGIN
 		END;`
 
 func (pp *PostgresqlPrivilege) getPlPgSQL(action string) (text string, parameters []interface{}) {
-	if strings.ToUpper(pp.TargetType) == "TABLE" && pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
+	uTargetType := strings.ToUpper(pp.TargetType)
+	uPrivilege := strings.ToUpper(pp.Privilege)
+
+	if uTargetType == "TABLE" && pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
 		columnQuoteIdents := make([]string, len(*pp.ColumnNames))
 		for i := range columnQuoteIdents {
 			columnQuoteIdents[i] = "quote_ident(?)"
@@ -173,9 +176,9 @@ func (pp *PostgresqlPrivilege) getPlPgSQL(action string) (text string, parameter
 			fmt.Sprintf(
 				"EXECUTE '%s %s (' || %s || ') ON %s ' || %s || ' TO ' || username;",
 				action,
-				pp.Privilege,
+				uPrivilege,
 				strings.Join(columnQuoteIdents, " || ', ' || "),
-				pp.TargetType,
+				uTargetType,
 				tableQuotedIdents,
 			),
 		), append(
@@ -183,25 +186,25 @@ func (pp *PostgresqlPrivilege) getPlPgSQL(action string) (text string, parameter
 			tableQuotedIdentsParameters...
 		)
 	}
-	if strings.ToUpper(pp.TargetType) == "DATABASE" {
+	if uTargetType == "DATABASE" {
 		return fmt.Sprintf(
 			privilegeStatementWrapper,
 			fmt.Sprintf(
 				"EXECUTE '%s %s ON %s ' || dbname || ' TO ' || username;",
 				action,
-				pp.Privilege,
-				pp.TargetType,
+				uPrivilege,
+				uTargetType,
 			),
 		), []interface{}{}
 	}
-	if strings.ToUpper(pp.TargetType) == "SCHEMA" {
+	if uTargetType == "SCHEMA" {
 		return fmt.Sprintf(
 			privilegeStatementWrapper,
 			fmt.Sprintf(
 				"EXECUTE '%s %s ON %s ' || quote_ident(?) || ' TO ' || username;",
 				action,
-				pp.Privilege,
-				pp.TargetType,
+				uPrivilege,
+				uTargetType,
 			),
 		), []interface{}{
 			*pp.TargetName,
@@ -215,8 +218,8 @@ func (pp *PostgresqlPrivilege) getPlPgSQL(action string) (text string, parameter
 		fmt.Sprintf(
 			"EXECUTE '%s %s ON %s ' || %s || ' TO ' || username;",
 			action,
-			pp.Privilege,
-			pp.TargetType,
+			uPrivilege,
+			uTargetType,
 			targetQuotedIdents,
 		),
 	), append(
@@ -365,9 +368,12 @@ func (bp *PostgresUserBindParameters) GetPrivilegeAssignmentStatement(username s
 
 	var privsBuilder strings.Builder
 	var privsParameters []interface{}
-	for _, priv := range *privs {
+	for i, priv := range *privs {
 		privPlPgSQL, privParameters := priv.getPlPgSQL(privsAction)
 
+		if i != 0 {
+			privsBuilder.WriteString("\n\t\t")
+		}
 		privsBuilder.WriteString(privPlPgSQL)
 		privsParameters = append(privsParameters, privParameters...)
 	}
