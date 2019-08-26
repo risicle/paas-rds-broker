@@ -219,6 +219,157 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			err := bp.Validate()
 			Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql sequence privilege: INSERT`)))
 		})
+
+		It("returns an error if inappropriate options are specified with DATABASE target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "database",
+						TargetName: stringPointer("bar"),
+						Privilege: "ALL",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`target_name makes no sense for 'DATABASE' postgresql privilege target_type`)))
+
+			bp = PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "DATABASE",
+						TargetSchema: stringPointer("foo123"),
+						Privilege: "ALL",
+					},
+				},
+			}
+
+			err = bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`target_schema makes no sense for 'DATABASE' postgresql privilege target_type`)))
+
+			bp = PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "revoke",
+				GrantPrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "DATABASE",
+						Privilege: "ALL",
+						ColumnNames: &[]string{
+							"valid 123",
+						},
+					},
+				},
+			}
+
+			err = bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`column_names makes no sense for 'DATABASE' postgresql privilege target_type`)))
+		})
+
+		It("returns an error if an inappropriate privilege is specified with DATABASE target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "revoke",
+				GrantPrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "DATABASE",
+						Privilege: "INSERT",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql database privilege: INSERT`)))
+		})
+
+		It("returns an error if no target_name supplied with SCHEMA target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "schema",
+						Privilege: "all",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`Must provide a non-empty target_name for 'SCHEMA' postgresql privilege target_type`)))
+		})
+
+		It("returns an error if invalid target_name supplied with SCHEMA target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "schema",
+						TargetName: stringPointer("invalid✈"),
+						Privilege: "all",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`Non-ASCII characters in postgresql object names not (yet) supported: invalid✈`)))
+		})
+
+		It("returns an error if inappropriate options are specified with SCHEMA target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "SCHEMA",
+						TargetSchema: stringPointer("foo"),
+						TargetName: stringPointer("bar"),
+						Privilege: "ALL",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`target_schema makes no sense for 'SCHEMA' postgresql privilege target_type (try target_name instead)`)))
+
+			bp = PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "grant",
+				RevokePrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "SCHEMA",
+						TargetName: stringPointer("bar"),
+						Privilege: "ALL",
+						ColumnNames: &[]string{
+							"valid 123",
+						},
+					},
+				},
+			}
+
+			err = bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`column_names makes no sense for 'SCHEMA' postgresql privilege target_type`)))
+		})
+
+		It("returns an error if an inappropriate privilege is specified with SCHEMA target_type", func() {
+			bp := PostgresUserBindParameters {
+				IsOwner: boolPointer(false),
+				DefaultPrivilegePolicy: "revoke",
+				GrantPrivileges: &[]PostgresqlPrivilege{
+					PostgresqlPrivilege{
+						TargetType: "schema",
+						TargetName: stringPointer("bar"),
+						Privilege: "EXECUTE",
+					},
+				},
+			}
+
+			err := bp.Validate()
+			Expect(err).To(MatchError(ContainSubstring(`Unknown postgresql schema privilege: EXECUTE`)))
+		})
 	})
 
 	Describe("Statement generation", func() {
