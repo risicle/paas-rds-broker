@@ -4,7 +4,24 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/lib/pq" // PostgreSQL Driver
 )
+
+type PrivAction int
+
+const (
+	Revoke PrivAction = iota
+	Grant
+)
+
+func (pa PrivAction) String() string {
+	return [...]string{"REVOKE", "GRANT"}[pa]
+}
+
+func (pa PrivAction) Preposition() string {
+	return [...]string{"FROM", "TO"}[pa]
+}
 
 type PostgresqlPrivilege struct {
 	TargetType   string    `json:"target_type"`
@@ -102,7 +119,6 @@ func (pp *PostgresqlPrivilege) Validate() error {
 			}
 
 			switch strings.ToUpper(pp.Privilege) {
-				case "CREATE":
 				case "TEMPORARY":
 				case "TEMP":
 				case "ALL":
@@ -127,7 +143,6 @@ func (pp *PostgresqlPrivilege) Validate() error {
 			}
 
 			switch strings.ToUpper(pp.Privilege) {
-				case "CREATE":
 				case "USAGE":
 				case "ALL":
 				default:
@@ -140,12 +155,12 @@ func (pp *PostgresqlPrivilege) Validate() error {
 	return nil
 }
 
-func getQuotedIdents(schema *string, name string) (text string, parameters []interface{}) {
+func getQuotedIdents(schema *string, name string) string {
 	if schema == nil || *schema == "" {
-		return "quote_ident(?)", []interface{}{name}
+		return pq.QuoteIdentifier(name)
 	}
 
-	return "quote_ident(?) || '.' || quote_ident(?)", []interface{}{*schema, name}
+	return fmt.Sprintf("%s.%s", pq.QuoteIdentifier(*schema), pq.QuoteIdentifier(name))
 }
 
 const privilegeStatementWrapper = `BEGIN
@@ -155,75 +170,65 @@ const privilegeStatementWrapper = `BEGIN
 				NULL;
 		END;`
 
-func (pp *PostgresqlPrivilege) getPlPgSQL(action string) (text string, parameters []interface{}) {
+func (pp *PostgresqlPrivilege) getPlPgSQL(action PrivAction) string {
 	uTargetType := strings.ToUpper(pp.TargetType)
 	uPrivilege := strings.ToUpper(pp.Privilege)
 
 	if uTargetType == "TABLE" && pp.ColumnNames != nil && len(*pp.ColumnNames) != 0 {
-		columnQuoteIdents := make([]string, len(*pp.ColumnNames))
-		for i := range columnQuoteIdents {
-			columnQuoteIdents[i] = "quote_ident(?)"
-		}
-
-		tableQuotedIdents, tableQuotedIdentsParameters := getQuotedIdents(pp.TargetSchema, *pp.TargetName)
-		parameters := make([]interface{}, len(*pp.ColumnNames))
+		quoteIdentedCols := make([]string, len(*pp.ColumnNames))
 		for i, col := range *pp.ColumnNames {
-			parameters[i] = col
+			quoteIdentedCols[i] = pq.QuoteIdentifier(col)
 		}
 
 		return fmt.Sprintf(
 			privilegeStatementWrapper,
 			fmt.Sprintf(
-				"EXECUTE '%s %s (' || %s || ') ON %s ' || %s || ' TO ' || username;",
+				"EXECUTE '%s %s (' || %s || ') ON %s ' || %s || ' %s ' || username;",
 				action,
 				uPrivilege,
-				strings.Join(columnQuoteIdents, " || ', ' || "),
+				pq.QuoteLiteral(strings.Join(quoteIdentedCols, ", ")),
 				uTargetType,
-				tableQuotedIdents,
+				pq.QuoteLiteral(getQuotedIdents(pp.TargetSchema, *pp.TargetName)),
+				action.Preposition(),
 			),
-		), append(
-			parameters,
-			tableQuotedIdentsParameters...
 		)
 	}
 	if uTargetType == "DATABASE" {
 		return fmt.Sprintf(
 			privilegeStatementWrapper,
 			fmt.Sprintf(
-				"EXECUTE '%s %s ON %s ' || dbname || ' TO ' || username;",
+				"EXECUTE '%s %s ON %s ' || dbname || ' %s ' || username;",
 				action,
 				uPrivilege,
 				uTargetType,
+				action.Preposition(),
 			),
-		), []interface{}{}
+		)
 	}
 	if uTargetType == "SCHEMA" {
 		return fmt.Sprintf(
 			privilegeStatementWrapper,
 			fmt.Sprintf(
-				"EXECUTE '%s %s ON %s ' || quote_ident(?) || ' TO ' || username;",
+				"EXECUTE '%s %s ON %s ' || %s || ' %s ' || username;",
 				action,
 				uPrivilege,
 				uTargetType,
+				pq.QuoteLiteral(pq.QuoteIdentifier(*pp.TargetName)),
+				action.Preposition(),
 			),
-		), []interface{}{
-			*pp.TargetName,
-		}
+		)
 	}
-
-	targetQuotedIdents, targetQuotedIdentsParameters := getQuotedIdents(pp.TargetSchema, *pp.TargetName)
 
 	return fmt.Sprintf(
 		privilegeStatementWrapper,
 		fmt.Sprintf(
-			"EXECUTE '%s %s ON %s ' || %s || ' TO ' || username;",
+			"EXECUTE '%s %s ON %s ' || %s || ' %s ' || username;",
 			action,
 			uPrivilege,
 			uTargetType,
-			targetQuotedIdents,
+			pq.QuoteLiteral(getQuotedIdents(pp.TargetSchema, *pp.TargetName)),
+			action.Preposition(),
 		),
-	), append(
-		targetQuotedIdentsParameters,
 	)
 }
 
@@ -290,11 +295,11 @@ func (bp *PostgresUserBindParameters) Validate() error {
 	return nil
 }
 
-const grantAllPrivilegesFragment = `FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
-			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
+const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 		END LOOP;
 
 		EXECUTE 'GRANT ALL ON DATABASE ' || dbname || ' TO ' || username;
@@ -306,37 +311,39 @@ const grantAllPrivilegesFragment = `FOR schema_name IN SELECT schema_name FROM i
 
 		`
 
-const grantUnhandledPrivilegesFragment = `FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
+const grantUnhandledPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
 
-		FOR type_schema, type_name IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
-			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(type_schema) || '.' || quote_ident(type_name) || ' TO ' || username;
+		FOR r IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
+			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(r.user_defined_type_schema) || '.' || quote_ident(r.user_defined_type_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR domain_schema, domain_name IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
-			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(domain_schema) || '.' || quote_ident(domain_name) || ' TO ' || username;
+		FOR r IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
+			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(r.domain_schema) || '.' || quote_ident(r.domain_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR lang_name IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
-			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(lang_name) || ' TO ' || username;
+		FOR r IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
+			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(r.lanname) || ' TO ' || username;
 		END LOOP;
+
+		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;
 
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
-		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO ' || username;`
+		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO ' || username;
+		EXECUTE 'ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM ' || username;`
 
 const immediatePlPgSQLWrapper = `
-	DO
-	$body$
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := %s;
+		dbname text := %s;
+		r RECORD;
 	BEGIN
 		%s
-	END
-	$body$`
+	END`
 
-func (bp *PostgresUserBindParameters) GetDefaultPrivilegeStatement(username string, dbname string) (statement string, parameters []interface{}) {
+func (bp *PostgresUserBindParameters) GetDefaultPrivilegePlPgSQL(username string, dbname string) string {
 	var statementBuilder strings.Builder
 
 	if strings.ToLower(bp.DefaultPrivilegePolicy) != "revoke" {
@@ -345,43 +352,47 @@ func (bp *PostgresUserBindParameters) GetDefaultPrivilegeStatement(username stri
 	}
 
 	// we don't implement a way to further control some types of privilege, so for these features to be at all
-	// usable by a non-owner user, we need to allow all of them
+	// usable by a non-owner user, we need to allow all of them. however we can not allow any form of CREATE permission
+	// for these users as it would cause ownership complications.
 	statementBuilder.WriteString(grantUnhandledPrivilegesFragment)
 
-	return fmt.Sprintf(immediatePlPgSQLWrapper, statementBuilder.String()), []interface{}{username, dbname}
+	return fmt.Sprintf(
+		immediatePlPgSQLWrapper,
+		pq.QuoteLiteral(pq.QuoteIdentifier(username)),
+		pq.QuoteLiteral(pq.QuoteIdentifier(dbname)),
+		statementBuilder.String(),
+	)
 }
 
-func (bp *PostgresUserBindParameters) GetPrivilegeAssignmentStatement(username string, dbname string) (statement string, parameters []interface{}) {
+func (bp *PostgresUserBindParameters) GetPrivilegeAssignmentPlPgSQL(username string, dbname string) string {
 	var privs *[]PostgresqlPrivilege
-	var privsAction string
+	var privsAction PrivAction
 	if strings.ToLower(bp.DefaultPrivilegePolicy) != "revoke" {
 		privs = bp.RevokePrivileges
-		privsAction = "REVOKE"
+		privsAction = Revoke
 	} else {
 		privs = bp.GrantPrivileges
-		privsAction = "GRANT"
+		privsAction = Grant
 	}
 
 	if privs == nil || len(*privs) == 0 || bp.IsOwner == nil || *bp.IsOwner {
-		return "", []interface{}{}
+		return ""
 	}
 
 	var privsBuilder strings.Builder
-	var privsParameters []interface{}
 	for i, priv := range *privs {
-		privPlPgSQL, privParameters := priv.getPlPgSQL(privsAction)
+		privPlPgSQL := priv.getPlPgSQL(privsAction)
 
 		if i != 0 {
 			privsBuilder.WriteString("\n\t\t")
 		}
 		privsBuilder.WriteString(privPlPgSQL)
-		privsParameters = append(privsParameters, privParameters...)
 	}
 
-	wrapperParameters := []interface{}{
-		username,
-		dbname,
-	}
-
-	return fmt.Sprintf(immediatePlPgSQLWrapper, privsBuilder.String()), append(wrapperParameters, privsParameters...)
+	return fmt.Sprintf(
+		immediatePlPgSQLWrapper,
+		pq.QuoteLiteral(pq.QuoteIdentifier(username)),
+		pq.QuoteLiteral(pq.QuoteIdentifier(dbname)),
+		privsBuilder.String(),
+	)
 }

@@ -372,7 +372,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 		})
 	})
 
-	Describe("Statement generation", func() {
+	Describe("PlPgSQL generation", func() {
 		It("generates a correct default privilege statement for default-revoke policy", func() {
 			bp := PostgresUserBindParameters {
 				IsOwner: boolPointer(false),
@@ -381,36 +381,38 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			defaultStatement, defaultParams := bp.GetDefaultPrivilegeStatement("someuser", "somedb")
+			defaultPlPgSQL := bp.GetDefaultPrivilegePlPgSQL("someuser", "somedb")
 
-			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
-			Expect(defaultStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
+			Expect(defaultPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
-		FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
 
-		FOR type_schema, type_name IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
-			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(type_schema) || '.' || quote_ident(type_name) || ' TO ' || username;
+		FOR r IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
+			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(r.user_defined_type_schema) || '.' || quote_ident(r.user_defined_type_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR domain_schema, domain_name IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
-			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(domain_schema) || '.' || quote_ident(domain_name) || ' TO ' || username;
+		FOR r IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
+			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(r.domain_schema) || '.' || quote_ident(r.domain_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR lang_name IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
-			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(lang_name) || ' TO ' || username;
+		FOR r IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
+			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(r.lanname) || ' TO ' || username;
 		END LOOP;
+
+		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;
 
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO ' || username;
-	END
-	$body$`))
+		EXECUTE 'ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM ' || username;
+	END`))
 		})
 
 		It("generates a correct default privilege statement for default-grant policy", func() {
@@ -421,21 +423,20 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			defaultStatement, defaultParams := bp.GetDefaultPrivilegeStatement("someuser", "somedb")
+			defaultPlPgSQL := bp.GetDefaultPrivilegePlPgSQL("someuser", "somedb")
 
-			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
-			Expect(defaultStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
+			Expect(defaultPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
-		FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
-			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 		END LOOP;
 
 		EXECUTE 'GRANT ALL ON DATABASE ' || dbname || ' TO ' || username;
@@ -445,26 +446,29 @@ var _ = Describe("PostgresUserBindParameters", func() {
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO ' || username;
 
-		FOR schema_name IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(schema_name) || ' TO ' || username;
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
 
-		FOR type_schema, type_name IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
-			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(type_schema) || '.' || quote_ident(type_name) || ' TO ' || username;
+		FOR r IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
+			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(r.user_defined_type_schema) || '.' || quote_ident(r.user_defined_type_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR domain_schema, domain_name IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
-			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(domain_schema) || '.' || quote_ident(domain_name) || ' TO ' || username;
+		FOR r IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
+			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(r.domain_schema) || '.' || quote_ident(r.domain_name) || ' TO ' || username;
 		END LOOP;
 
-		FOR lang_name IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
-			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(lang_name) || ' TO ' || username;
+		FOR r IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
+			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(r.lanname) || ' TO ' || username;
 		END LOOP;
+
+		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;
 
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO ' || username;
-	END
-	$body$`))
+		EXECUTE 'ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM ' || username;
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for column-targeted policies", func() {
@@ -487,12 +491,10 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "foo", "bar", "a-schema", "Some Name"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "foo", "bar", "a-schema", "Some Name"}))
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -503,8 +505,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for table-targeted policies", func() {
@@ -523,12 +524,10 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Name"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Name"}))
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -539,8 +538,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for database-targeted policies", func() {
@@ -557,12 +555,10 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -573,8 +569,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for schema-targeted policies", func() {
@@ -592,12 +587,10 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "abc123"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "abc123"}))
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -608,8 +601,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for sequence-targeted policies", func() {
@@ -628,12 +620,10 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Schema", "abc123"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Schema", "abc123"}))
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -644,8 +634,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates a correct privilege assignment statement for multi-clause policies", func() {
@@ -687,12 +676,9 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "foo", "bar", "b a z", "a-schema", "Some Name", "qux", "a-schema", "Some Name", "abc123"}))
-			Expect(assnStatement).To(Equal(`
-	DO
-	$body$
+			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := quote_ident(?);
 		dbname text := quote_ident(?);
@@ -721,8 +707,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
-	END
-	$body$`))
+	END`))
 		})
 
 		It("Generates an empty privilege assignment statement for privilege-less policies", func() {
@@ -733,10 +718,9 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(bp.Validate()).ToNot(HaveOccurred())
 
-			assnStatement, assnParams := bp.GetPrivilegeAssignmentStatement("someuser", "somedb")
+			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-			Expect(assnParams).To(BeEquivalentTo([]interface{}{}))
-			Expect(assnStatement).To(Equal(""))
+			Expect(assnPlPgSQL).To(Equal(""))
 		})
 	})
 })

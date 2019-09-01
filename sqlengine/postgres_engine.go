@@ -98,17 +98,17 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 			return "", "", err
 		}
 	} else {
-		defaultPrivilegeStatement, defaultPrivilegeParameters := userBindParameters.GetPrivilegeAssignmentStatement(username, dbname)
+		defaultPrivilegePlPgSQL := userBindParameters.GetDefaultPrivilegePlPgSQL(username, dbname)
 
-		if _, err := tx.Exec(defaultPrivilegeStatement, defaultPrivilegeParameters...); err != nil {
+		if _, err := tx.Exec(fmt.Sprintf("DO %s", pq.QuoteLiteral(defaultPrivilegePlPgSQL))); err != nil {
 			d.logger.Error("Grant sql-error", err)
 			return "", "", err
 		}
 
-		privilegeAssignmentStatement, privilegeAssignmentParameters := userBindParameters.GetPrivilegeAssignmentStatement(username, dbname)
+		privilegeAssignmentPlPgSQL := userBindParameters.GetPrivilegeAssignmentPlPgSQL(username, dbname)
 		
-		if privilegeAssignmentStatement != "" {
-			if _, err := tx.Exec(privilegeAssignmentStatement, privilegeAssignmentParameters...); err != nil {
+		if privilegeAssignmentPlPgSQL != "" {
+			if _, err := tx.Exec(fmt.Sprintf("DO %s", pq.QuoteLiteral(privilegeAssignmentPlPgSQL))); err != nil {
 				d.logger.Error("Grant sql-error", err)
 				return "", "", err
 			}
