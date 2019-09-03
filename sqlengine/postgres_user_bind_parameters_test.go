@@ -390,7 +390,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 		dbname text := '"somedb"';
 		r RECORD;
 	BEGIN
-		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
@@ -432,7 +432,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 		dbname text := '"somedb"';
 		r RECORD;
 	BEGIN
-		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
@@ -446,7 +446,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO ' || username;
 
-		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
@@ -496,11 +496,12 @@ var _ = Describe("PostgresUserBindParameters", func() {
 // 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "foo", "bar", "a-schema", "Some Name"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'GRANT SELECT (' || quote_ident(?) || ', ' || quote_ident(?) || ') ON TABLE ' || quote_ident(?) || '.' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'GRANT SELECT (' || '"foo", "bar"' || ') ON TABLE ' || '"a-schema"."Some Name"' || ' TO ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
@@ -529,11 +530,12 @@ var _ = Describe("PostgresUserBindParameters", func() {
 // 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Name"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'REVOKE DELETE ON TABLE ' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'REVOKE DELETE ON TABLE ' || '"Some Name"' || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
@@ -560,11 +562,12 @@ var _ = Describe("PostgresUserBindParameters", func() {
 // 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'REVOKE TEMP ON DATABASE ' || dbname || ' TO ' || username;
+			EXECUTE 'REVOKE TEMP ON DATABASE ' || dbname || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
@@ -579,7 +582,7 @@ var _ = Describe("PostgresUserBindParameters", func() {
 				GrantPrivileges: &[]PostgresqlPrivilege{
 					PostgresqlPrivilege{
 						TargetType: "Schema",
-						Privilege: "CREATE",
+						Privilege: "USAGE",
 						TargetName: stringPointer("abc123"),
 					},
 				},
@@ -592,11 +595,12 @@ var _ = Describe("PostgresUserBindParameters", func() {
 // 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "abc123"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'GRANT CREATE ON SCHEMA ' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'GRANT USAGE ON SCHEMA ' || '"abc123"' || ' TO ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
@@ -625,11 +629,12 @@ var _ = Describe("PostgresUserBindParameters", func() {
 // 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Schema", "abc123"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'GRANT ALL ON SEQUENCE ' || quote_ident(?) || '.' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'GRANT ALL ON SEQUENCE ' || '"Some Schema"."abc123"' || ' TO ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
@@ -680,29 +685,30 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
-		username text := quote_ident(?);
-		dbname text := quote_ident(?);
+		username text := '"someuser"';
+		dbname text := '"somedb"';
+		r RECORD;
 	BEGIN
 		BEGIN
-			EXECUTE 'REVOKE UPDATE (' || quote_ident(?) || ', ' || quote_ident(?) || ', ' || quote_ident(?) || ') ON TABLE ' || quote_ident(?) || '.' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'REVOKE UPDATE (' || '"foo", "bar", "b a z"' || ') ON TABLE ' || '"a-schema"."Some Name"' || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
 		BEGIN
-			EXECUTE 'REVOKE ALL ON DATABASE ' || dbname || ' TO ' || username;
+			EXECUTE 'REVOKE ALL ON DATABASE ' || dbname || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
 		BEGIN
-			EXECUTE 'REVOKE SELECT (' || quote_ident(?) || ') ON TABLE ' || quote_ident(?) || '.' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'REVOKE SELECT (' || '"qux"' || ') ON TABLE ' || '"a-schema"."Some Name"' || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;
 		END;
 		BEGIN
-			EXECUTE 'REVOKE USAGE ON SEQUENCE ' || quote_ident(?) || ' TO ' || username;
+			EXECUTE 'REVOKE USAGE ON SEQUENCE ' || '"abc123"' || ' FROM ' || username;
 		EXCEPTION
 			WHEN undefined_column OR undefined_table OR invalid_schema_name THEN
 				NULL;

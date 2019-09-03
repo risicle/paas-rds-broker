@@ -295,7 +295,7 @@ func (bp *PostgresUserBindParameters) Validate() error {
 	return nil
 }
 
-const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
@@ -311,7 +311,7 @@ const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information
 
 		`
 
-const grantUnhandledPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema') LOOP
+const grantUnhandledPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;

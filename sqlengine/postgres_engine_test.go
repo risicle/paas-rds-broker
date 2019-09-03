@@ -348,16 +348,19 @@ var _ = Describe("PostgresEngine", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 
-			It("blah", func() {
+			AfterEach(func() {
+				err := postgresEngine.DropUser(bindingID)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("is unable to create tables", func() {
 				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
 				db, err := sql.Open("postgres", connectionString)
 				Expect(err).ToNot(HaveOccurred())
 				defer db.Close()
 
-				_, err = db.Exec("CREATE TABLE foo (col CHAR(8))")
-				Expect(err).ToNot(HaveOccurred())
-				_, err = db.Exec("DROP TABLE foo")
-				Expect(err).ToNot(HaveOccurred())
+				_, err = db.Exec("CREATE SCHEMA foo")
+				Expect(err).To(HaveOccurred())
 			})
 		})
 	})
