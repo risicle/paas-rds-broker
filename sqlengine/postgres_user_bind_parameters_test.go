@@ -383,7 +383,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			defaultPlPgSQL := bp.GetDefaultPrivilegePlPgSQL("someuser", "somedb")
 
-// 			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
 			Expect(defaultPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -425,7 +424,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			defaultPlPgSQL := bp.GetDefaultPrivilegePlPgSQL("someuser", "somedb")
 
-// 			Expect(defaultParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
 			Expect(defaultPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -493,7 +491,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "foo", "bar", "a-schema", "Some Name"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -527,7 +524,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Name"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -559,7 +555,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -592,7 +587,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "abc123"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';
@@ -626,7 +620,6 @@ var _ = Describe("PostgresUserBindParameters", func() {
 
 			assnPlPgSQL := bp.GetPrivilegeAssignmentPlPgSQL("someuser", "somedb")
 
-// 			Expect(assnParams).To(BeEquivalentTo([]interface{}{"someuser", "somedb", "Some Schema", "abc123"}))
 			Expect(assnPlPgSQL).To(Equal(`
 	DECLARE
 		username text := '"someuser"';

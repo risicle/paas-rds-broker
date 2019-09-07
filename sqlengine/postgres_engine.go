@@ -91,7 +91,7 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 
 	if userBindParameters.IsOwner == nil || *userBindParameters.IsOwner {
 		grantMembershipStatement := fmt.Sprintf(`grant "%s" to "%s"`, groupname, username)
-		d.logger.Debug("grant-privileges", lager.Data{"statement": grantMembershipStatement})
+		d.logger.Debug("grant-group-membership", lager.Data{"statement": grantMembershipStatement})
 
 		if _, err := tx.Exec(grantMembershipStatement); err != nil {
 			d.logger.Error("Grant sql-error", err)
