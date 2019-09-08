@@ -344,7 +344,7 @@ var _ = Describe("PostgresEngine", func() {
 		Context("With a non-owner specified by userBindParameters", func() {
 			BeforeEach(func() {
 				var err error
-				createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": false, "default_privilege_policy": "revoke"}`))
+				createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, rawMessagePointer(`{"is_owner": false, "default_privilege_policy": "grant"}`))
 				Expect(err).ToNot(HaveOccurred())
 			})
 
@@ -359,8 +359,8 @@ var _ = Describe("PostgresEngine", func() {
 				Expect(err).ToNot(HaveOccurred())
 				defer db.Close()
 
-				_, err = db.Exec("CREATE SCHEMA foo")
-				Expect(err).To(HaveOccurred())
+				_, err = db.Exec("CREATE TABLE foo (col CHAR(8))")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
 			})
 		})
 	})

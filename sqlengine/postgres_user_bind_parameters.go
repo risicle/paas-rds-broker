@@ -298,41 +298,22 @@ func (bp *PostgresUserBindParameters) Validate() error {
 const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
 			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
+
+			-- we cannot allow any form of CREATE permission for non-owner users as it would cause ownership complications
+			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
 
 		EXECUTE 'GRANT ALL ON DATABASE ' || dbname || ' TO ' || username;
 
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO ' || username;
-		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO ' || username;
 
-		`
+		-- again, we cannot allow any form of CREATE permission for non-owner users
+		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;`
 
-const grantUnhandledPrivilegesFragment = `FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
-			EXECUTE 'GRANT ALL ON ALL FUNCTIONS IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
-			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
-		END LOOP;
-
-		FOR r IN SELECT user_defined_type_schema, user_defined_type_name FROM information_schema.user_defined_types LOOP
-			EXECUTE 'GRANT ALL ON TYPE ' || quote_ident(r.user_defined_type_schema) || '.' || quote_ident(r.user_defined_type_name) || ' TO ' || username;
-		END LOOP;
-
-		FOR r IN SELECT domain_schema, domain_name FROM information_schema.domains LOOP
-			EXECUTE 'GRANT ALL ON DOMAIN ' || quote_ident(r.domain_schema) || '.' || quote_ident(r.domain_name) || ' TO ' || username;
-		END LOOP;
-
-		FOR r IN SELECT lanname FROM pg_catalog.pg_language WHERE lanpltrusted LOOP
-			EXECUTE 'GRANT ALL ON LANGUAGE ' || quote_ident(r.lanname) || ' TO ' || username;
-		END LOOP;
-
-		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;
-
-		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO ' || username;
-		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO ' || username;
-		EXECUTE 'ALTER DEFAULT PRIVILEGES REVOKE CREATE ON SCHEMAS FROM ' || username;`
+const commonDefaultPrivilegeFragment = `EXECUTE 'GRANT CONNECT ON DATABASE ' || dbname || ' TO ' || username;`
 
 const immediatePlPgSQLWrapper = `
 	DECLARE
@@ -349,12 +330,10 @@ func (bp *PostgresUserBindParameters) GetDefaultPrivilegePlPgSQL(username string
 	if strings.ToLower(bp.DefaultPrivilegePolicy) != "revoke" {
 		// grant priviliges to all objects which can then be revoked individually
 		statementBuilder.WriteString(grantAllPrivilegesFragment)
+		statementBuilder.WriteString("\n\n\t\t")
 	}
 
-	// we don't implement a way to further control some types of privilege, so for these features to be at all
-	// usable by a non-owner user, we need to allow all of them. however we can not allow any form of CREATE permission
-	// for these users as it would cause ownership complications.
-	statementBuilder.WriteString(grantUnhandledPrivilegesFragment)
+	statementBuilder.WriteString(commonDefaultPrivilegeFragment)
 
 	return fmt.Sprintf(
 		immediatePlPgSQLWrapper,
