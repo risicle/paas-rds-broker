@@ -568,7 +568,7 @@ func (b *RDSBroker) Unbind(
 	}
 	defer sqlEngine.Close()
 
-	if err = sqlEngine.DropUser(bindingID); err != nil {
+	if err = sqlEngine.DropUser(bindingID, dbName); err != nil {
 		return err
 	}
 
