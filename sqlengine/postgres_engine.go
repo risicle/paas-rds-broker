@@ -183,6 +183,7 @@ func (d *PostgresEngine) dropUser(username, dbname string) (success bool, err er
 	groupname := d.generatePostgresGroup(dbname)
 
 	rows, err := d.db.Query("SELECT 1 FROM pg_user WHERE usename = $1", username)
+	defer rows.Close()
 	if err != nil {
 		d.logger.Error("sql-error", err)
 		return false, err
