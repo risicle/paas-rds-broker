@@ -123,6 +123,10 @@ func (d *PostgresEngine) execCreateUser(tx *sql.Tx, bindingID, dbname string, us
 				return "", "", err
 			}
 		}
+
+		if err = d.ensureNonOwnerRestrictions(tx, username, dbname); err != nil {
+			return "", "", err
+		}
 	}
 
 	if err = d.ensureGroupPrivileges(tx, dbname, groupname); err != nil {
@@ -454,13 +458,13 @@ const ensurePublicPrivilegesPattern = `
 		ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM PUBLIC;
 		ALTER DEFAULT PRIVILEGES REVOKE ALL ON SCHEMAS FROM PUBLIC;
 
+		REVOKE ALL ON DATABASE "{{.dbname}}" FROM PUBLIC;
+
 		-- there are other privileges for which we don't currently implement a way to further
 		-- control, so we have to ensure PUBLIC has access to them to prevent removing abilities
 		-- entirely for some users
 		ALTER DEFAULT PRIVILEGES GRANT ALL ON FUNCTIONS TO PUBLIC;
 		ALTER DEFAULT PRIVILEGES GRANT ALL ON TYPES TO PUBLIC;
-
-		REVOKE ALL ON DATABASE "{{.dbname}}" FROM PUBLIC;
 
 		-- now we perform equivalent operations for any objects that might already exist
 
@@ -542,6 +546,42 @@ func (d *PostgresEngine) ensureGroupPrivileges(tx *sql.Tx, dbname, groupname str
 	d.logger.Debug("ensure-group-privileges", lager.Data{"statement": ensureGroupPrivilegesStatement.String()})
 
 	if _, err := tx.Exec(ensureGroupPrivilegesStatement.String()); err != nil {
+		d.logger.Error("sql-error", err)
+		return err
+	}
+
+	return nil
+}
+
+const ensureNonOwnerRestrictionsPattern = `
+	do
+	$body$
+	declare
+		r record;
+	begin
+		-- we cannot allow any form of CREATE permission for non-owner users as it would cause ownership complications
+		FOR r IN SELECT schema_name FROM information_schema.schemata WHERE schema_name != 'information_schema' AND schema_name NOT LIKE 'pg_%' LOOP
+			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM "{{.rolename}}"';
+		END LOOP;
+
+		REVOKE CREATE ON DATABASE "{{.dbname}}" FROM "{{.rolename}}";
+	end
+	$body$
+	`
+
+var ensureNonOwnerRestrictionsTemplate = template.Must(template.New("ensureNonOwnerRestrictions").Parse(ensureNonOwnerRestrictionsPattern))
+
+func (d *PostgresEngine) ensureNonOwnerRestrictions(tx *sql.Tx, username, dbname string) error {
+	var ensureNonOwnerRestrictionsStatement bytes.Buffer
+	if err := ensureNonOwnerRestrictionsTemplate.Execute(&ensureNonOwnerRestrictionsStatement, map[string]string{
+		"rolename": username,
+		"dbname": dbname,
+	}); err != nil {
+		return err
+	}
+	d.logger.Debug("ensure-non-owner-restrictions", lager.Data{"statement": ensureNonOwnerRestrictionsStatement.String()})
+
+	if _, err := tx.Exec(ensureNonOwnerRestrictionsStatement.String()); err != nil {
 		d.logger.Error("sql-error", err)
 		return err
 	}

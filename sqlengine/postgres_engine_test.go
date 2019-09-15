@@ -603,13 +603,13 @@ var _ = Describe("PostgresEngine", func() {
 					dbname,
 					rawMessagePointer(
 						`{"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [
-							{"target_type": "SCHEMA", "target_name": "public", "privilege": "USAGE"},
+							{"target_type": "SCHEMA", "target_name": "public", "privilege": "ALL"},
 							{"target_type": "TABLE", "target_name": "t_created_before_user", "privilege": "SELECT"},
 							{"target_type": "TABLE", "target_name": "t_created_after_user", "privilege": "SELECT"},
 							{"target_type": "TABLE", "target_name": "doesnt_exist", "privilege": "ALL"},
 							{"target_type": "SEQUENCE", "target_name": "s_created_before_user", "privilege": "SELECT"},
 							{"target_type": "SEQUENCE", "target_name": "s_created_after_user", "privilege": "ALL"},
-							{"target_type": "DATABASE", "privilege": "TEMP"}
+							{"target_type": "DATABASE", "privilege": "ALL"}
 						]}`,
 					),
 				)
@@ -667,6 +667,19 @@ var _ = Describe("PostgresEngine", func() {
 				Expect(err).To(MatchError(ContainSubstring(`permission`)))
 
 				_, err = db.Exec("SELECT last_value FROM s_created_after_user")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+			})
+
+			It("Is not granted any CREATE privileges", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("CREATE SCHEMA test123")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+
+				_, err = db.Exec("CREATE TABLE test456 AS SELECT 789 AS x")
 				Expect(err).To(MatchError(ContainSubstring(`permission`)))
 			})
 		})
@@ -734,6 +747,54 @@ var _ = Describe("PostgresEngine", func() {
 				Expect(ok).To(BeTrue())
 				Expect(pqErr.Code).To(BeEquivalentTo("42501"))
 				Expect(pqErr.Message).To(MatchRegexp("permission denied to drop role"))
+			})
+		})
+
+		Context("A non-owner user exists", func() {
+
+			BeforeEach(func() {
+				var err error
+
+				_, err = postgresEngine.db.Exec("CREATE TABLE t_created_before_user AS SELECT 123 AS x")
+				Expect(err).ToNot(HaveOccurred())
+				_, err = postgresEngine.db.Exec("CREATE SEQUENCE s_created_before_user")
+				Expect(err).ToNot(HaveOccurred())
+
+				createdUser, createdPassword, err = postgresEngine.CreateUser(
+					bindingID,
+					dbname,
+					rawMessagePointer(
+						`{"is_owner": false, "default_privilege_policy": "revoke", "grant_privileges": [
+							{"target_type": "SCHEMA", "target_name": "public", "privilege": "USAGE"},
+							{"target_type": "TABLE", "target_name": "t_created_before_user", "privilege": "ALL"},
+							{"target_type": "SEQUENCE", "target_name": "s_created_before_user", "privilege": "ALL"}
+						]}`,
+					),
+				)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("DropUser() removes the credentials", func() {
+				err := postgresEngine.DropUser(bindingID, dbname)
+				Expect(err).ToNot(HaveOccurred())
+
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				defer db.Close()
+				Expect(err).ToNot(HaveOccurred())
+				err = db.Ping()
+				Expect(err).To(HaveOccurred())
+
+				pqErr, ok := err.(*pq.Error)
+				Expect(ok).To(BeTrue())
+				Expect(pqErr.Code).To(SatisfyAny(
+					BeEquivalentTo("28P01"),
+					BeEquivalentTo("28000"),
+				))
+				Expect(pqErr.Message).To(SatisfyAny(
+					MatchRegexp("authentication failed for user"),
+					MatchRegexp("role .* does not exist"),
+				))
 			})
 		})
 

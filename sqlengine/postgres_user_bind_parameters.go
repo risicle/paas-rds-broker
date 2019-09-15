@@ -299,19 +299,13 @@ const grantAllPrivilegesFragment = `FOR r IN SELECT schema_name FROM information
 			EXECUTE 'GRANT ALL ON ALL TABLES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON ALL SEQUENCES IN SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
 			EXECUTE 'GRANT ALL ON SCHEMA ' || quote_ident(r.schema_name) || ' TO ' || username;
-
-			-- we cannot allow any form of CREATE permission for non-owner users as it would cause ownership complications
-			EXECUTE 'REVOKE CREATE ON SCHEMA ' || quote_ident(r.schema_name) || ' FROM ' || username;
 		END LOOP;
 
 		EXECUTE 'GRANT ALL ON DATABASE ' || dbname || ' TO ' || username;
 
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO ' || username;
 		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SEQUENCES TO ' || username;
-		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO ' || username;
-
-		-- again, we cannot allow any form of CREATE permission for non-owner users
-		EXECUTE 'REVOKE CREATE ON DATABASE ' || dbname || ' FROM ' || username;`
+		EXECUTE 'ALTER DEFAULT PRIVILEGES GRANT ALL ON SCHEMAS TO ' || username;`
 
 const commonDefaultPrivilegeFragment = `EXECUTE 'GRANT CONNECT ON DATABASE ' || dbname || ' TO ' || username;`
 
