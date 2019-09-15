@@ -969,42 +969,66 @@ var _ = Describe("PostgresEngine", func() {
 		})
 
 		Describe("when there was already a user created", func() {
-			BeforeEach(func() {
-				var err error
-				createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, nil)
-				Expect(err).ToNot(HaveOccurred())
+			AssertState := func(){
+				It("ResetState() removes the credentials", func() {
+					connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+					db, err := sql.Open("postgres", connectionString)
+					defer db.Close()
+					Expect(err).ToNot(HaveOccurred())
+					err = db.Ping()
+					Expect(err).To(HaveOccurred())
 
-				err = postgresEngine.ResetState()
-				Expect(err).ToNot(HaveOccurred())
+					pqErr, ok := err.(*pq.Error)
+					Expect(ok).To(BeTrue())
+					Expect(pqErr.Code).To(SatisfyAny(
+						BeEquivalentTo("28P01"),
+						BeEquivalentTo("28000"),
+					))
+					Expect(pqErr.Message).To(SatisfyAny(
+						MatchRegexp("authentication failed for user"),
+						MatchRegexp("role .* does not exist"),
+					))
+				})
+
+				It("CreateUser() returns the same user and different password", func() {
+					user, password, err := postgresEngine.CreateUser(bindingID, dbname, nil)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(user).To(Equal(createdUser))
+					Expect(password).ToNot(Equal(createdPassword))
+				})
+			}
+
+			Describe("with empty userBindParameters", func() {
+				BeforeEach(func() {
+					var err error
+					createdUser, createdPassword, err = postgresEngine.CreateUser(bindingID, dbname, nil)
+					Expect(err).ToNot(HaveOccurred())
+
+					err = postgresEngine.ResetState()
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				AssertState()
 			})
 
-			It("ResetState() removes the credentials", func() {
-				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
-				db, err := sql.Open("postgres", connectionString)
-				defer db.Close()
-				Expect(err).ToNot(HaveOccurred())
-				err = db.Ping()
-				Expect(err).To(HaveOccurred())
+			Describe("with non-owner userBindParameters", func() {
+				BeforeEach(func() {
+					var err error
+					createdUser, createdPassword, err = postgresEngine.CreateUser(
+						bindingID,
+						dbname,
+						rawMessagePointer(
+							`{"is_owner": false, "default_privilege_policy": "grant"}`,
+						),
+					)
+					Expect(err).ToNot(HaveOccurred())
 
-				pqErr, ok := err.(*pq.Error)
-				Expect(ok).To(BeTrue())
-				Expect(pqErr.Code).To(SatisfyAny(
-					BeEquivalentTo("28P01"),
-					BeEquivalentTo("28000"),
-				))
-				Expect(pqErr.Message).To(SatisfyAny(
-					MatchRegexp("authentication failed for user"),
-					MatchRegexp("role .* does not exist"),
-				))
+					err = postgresEngine.ResetState()
+					Expect(err).ToNot(HaveOccurred())
+				})
+
+				AssertState()
 			})
-
-			It("CreateUser() returns the same user and different password", func() {
-				user, password, err := postgresEngine.CreateUser(bindingID, dbname, nil)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(user).To(Equal(createdUser))
-				Expect(password).ToNot(Equal(createdPassword))
-			})
-
 		})
 	})
 
