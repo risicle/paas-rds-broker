@@ -179,35 +179,56 @@ func (d *PostgresEngine) CreateUser(bindingID, dbname string, userBindParameters
 
 }
 
-func (d *PostgresEngine) dropUser(username, dbname string) (success bool, err error) {
+const excIgnoreWrapper = `DO $$
+BEGIN
+	DECLARE
+		message text;
+	BEGIN
+		%s;
+	EXCEPTION
+		WHEN OTHERS THEN
+			GET STACKED DIAGNOSTICS message = MESSAGE_TEXT;
+			RAISE WARNING 'swallowed ERROR: %%', message;
+	END;
+END;
+$$`
+
+func (d *PostgresEngine) dropUser(tx *sql.Tx, username, dbname string) (success bool, err error) {
 	groupname := d.generatePostgresGroup(dbname)
 
-	rows, err := d.db.Query("SELECT 1 FROM pg_user WHERE usename = $1", username)
-	defer rows.Close()
+	statement := "SELECT EXISTS(SELECT 1 FROM pg_user WHERE usename = $1)"
+	d.logger.Debug("role-check", lager.Data{"statement": statement, "username": username})
+	var found bool
+	err = tx.QueryRow(statement, username).Scan(&found)
 	if err != nil {
 		d.logger.Error("sql-error", err)
 		return false, err
 	}
-	if rows.Next() {
-		if err = rows.Err(); err != nil {
+	if found {
+		// in case the user managed to create an object that didn't get reassigned to the master group, attempt
+		// a reassignment now.
+		// however we wrap this in an exception-swallowing plpgsql block as there hopefully shouldn't be any such
+		// owned objects anyway and we want to be able to continue with an unspoiled transaction
+		statement = fmt.Sprintf(excIgnoreWrapper, fmt.Sprintf(`REASSIGN OWNED BY %s TO %s`, pq.QuoteIdentifier(username), pq.QuoteIdentifier(groupname)))
+		d.logger.Debug("reassign-owned", lager.Data{"statement": statement})
+		if _, err = tx.Exec(statement); err != nil {
+			d.logger.Error("sql-error", err)
+			return false, err
+		}
+		// the only things left should be privileges, which should be safely droppable, however use RESTRICT to
+		// guard against any possibility of data loss.
+		// however we wrap this too in an exception-swallowing plpgsql block as there might not be any such owned
+		// objects anyway and we want to be able to continue with an unspoiled transaction
+		statement = fmt.Sprintf(excIgnoreWrapper, fmt.Sprintf(`DROP OWNED BY %s RESTRICT`, pq.QuoteIdentifier(username)))
+		d.logger.Debug("drop-owned", lager.Data{"statement": statement})
+		if _, err = tx.Exec(statement); err != nil {
 			d.logger.Error("sql-error", err)
 			return false, err
 		}
 
-		// in case the user managed to create an object that didn't get reassigned to the master group, attempt
-		// a reassignment now
-		if _, err = d.db.Exec(fmt.Sprintf(`REASSIGN OWNED BY %s TO %s`, pq.QuoteIdentifier(username), pq.QuoteIdentifier(groupname))); err != nil {
-			d.logger.Info("warning", lager.Data{"warning": fmt.Sprintf("Error in REASSIGN OWNED BY: %s", err)})
-			// however we continue as there hopefully shouldn't be any such owned objects anyway
-		}
-		// the only things left should be privileges, which should be safely droppable, however use RESTRICT to
-		// guard against any possibility of data loss
-		if _, err = d.db.Exec(fmt.Sprintf(`DROP OWNED BY %s RESTRICT`, pq.QuoteIdentifier(username))); err != nil {
-			d.logger.Info("warning", lager.Data{"warning": fmt.Sprintf("Error in DROP OWNED BY: %s", err)})
-			// however we continue as might not be any such owned objects anyway
-		}
-
-		if _, err = d.db.Exec(fmt.Sprintf(`DROP ROLE %s`, pq.QuoteIdentifier(username))); err != nil {
+		statement = fmt.Sprintf(`DROP ROLE %s`, pq.QuoteIdentifier(username))
+		d.logger.Debug("drop-role", lager.Data{"statement": statement})
+		if _, err = tx.Exec(statement); err != nil {
 			d.logger.Error("sql-error", err)
 			return false, err
 		}
@@ -219,32 +240,50 @@ func (d *PostgresEngine) dropUser(username, dbname string) (success bool, err er
 }
 
 func (d *PostgresEngine) DropUser(bindingID, dbname string) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		d.logger.Error("sql-error", err)
+		return err
+	}
+	commitCalled := false
+	defer func() {
+		if !commitCalled {
+			tx.Rollback()
+		}
+	}()
+
 	username := d.UsernameGenerator(bindingID)
 
-	success, err := d.dropUser(username, dbname)
+	success, err := d.dropUser(tx, username, dbname)
 	if err != nil {
 		return err
 	}
-	if success {
-		return nil
-	}
-	d.logger.Info("warning", lager.Data{"warning": "User " + username + " does not exist"})
+	if !success {
+		d.logger.Info("warning", lager.Data{"warning": "User " + username + " does not exist"})
 
-	// When handling unbinds for bindings created before the switch to
-	// event-triggers based permissions the `username` won't exist.
-	// Also we changed how we generate usernames so we have to try to drop the username generated
-	// the old way.
-	username = generateUsernameOld(bindingID)
-	success, err = d.dropUser(username, dbname)
+		// When handling unbinds for bindings created before the switch to
+		// event-triggers based permissions the `username` won't exist.
+		// Also we changed how we generate usernames so we have to try to drop the username generated
+		// the old way.
+		username = generateUsernameOld(bindingID)
+		success, err = d.dropUser(tx, username, dbname)
+		if err != nil {
+			return err
+		}
+		if !success {
+			// If none of the usernames exist then we swallow the error
+			d.logger.Info("warning", lager.Data{"warning": "User " + username + " does not exist"})
+			return nil
+		}
+	}
+
+	// all unsuccessful cases have returned by now
+	err = tx.Commit()
 	if err != nil {
+		d.logger.Error("commit.sql-error", err)
 		return err
 	}
-	if success {
-		return nil
-	}
-	d.logger.Info("warning", lager.Data{"warning": "User " + username + " does not exist"})
-
-	// If none of the usernames exist then we swallow the error
+	commitCalled = true // Prevent Rollback being called in deferred function
 	return nil
 }
 
