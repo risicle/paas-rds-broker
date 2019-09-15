@@ -689,6 +689,104 @@ var _ = Describe("PostgresEngine", func() {
 				Expect(err).To(MatchError(ContainSubstring(`permission`)))
 			})
 		})
+
+		Context("With a default-grant non-owner with specific revocations specified by userBindParameters", func() {
+			BeforeEach(func() {
+				var err error
+				_, err = postgresEngine.db.Exec("CREATE TABLE t_created_before_user AS SELECT 123 AS x")
+				Expect(err).ToNot(HaveOccurred())
+				_, err = postgresEngine.db.Exec(`CREATE TABLE "t_weirdly "" ; ' ,named " AS SELECT 123 AS x`)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = postgresEngine.db.Exec("CREATE SEQUENCE s_created_before_user")
+				Expect(err).ToNot(HaveOccurred())
+
+				createdUser, createdPassword, err = postgresEngine.CreateUser(
+					bindingID,
+					dbname,
+					rawMessagePointer(
+						`{"is_owner": false, "default_privilege_policy": "grant", "revoke_privileges": [
+							{"target_type": "TABLE", "target_name": "t_created_before_user", "privilege": "SELECT"},
+							{"target_type": "TABLE", "target_name": "t_created_after_user", "privilege": "SELECT"},
+							{"target_type": "TABLE", "target_name": "t_weirdly \" ; ' ,named ", "privilege": "INSERT"},
+							{"target_type": "TABLE", "target_name": "doesnt_exist", "privilege": "ALL"},
+							{"target_type": "SEQUENCE", "target_name": "s_created_before_user", "privilege": "UPDATE"},
+							{"target_type": "SEQUENCE", "target_name": "s_created_after_user", "privilege": "SELECT"}
+						]}`,
+					),
+				)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = postgresEngine.db.Exec("CREATE TABLE t_created_after_user AS SELECT 456 AS x")
+				Expect(err).ToNot(HaveOccurred())
+				_, err = postgresEngine.db.Exec("CREATE SEQUENCE s_created_after_user")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Is able to create temporary tables", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("CREATE TEMPORARY TABLE qux AS SELECT 'abc'")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Is revoked privileges specified from pre-existing objects", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("SELECT * FROM t_created_before_user")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+
+				_, err = db.Exec(`INSERT INTO "t_weirdly "" ; ' ,named " VALUES (555)`)
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+
+				_, err = db.Exec("SELECT setval('s_created_before_user', 101)")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+			})
+
+			It("Is not revoked other privileges from specified pre-existing objects", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("INSERT INTO t_created_before_user VALUES (111)")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("SELECT last_value FROM s_created_before_user")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Is not revoked privileges specified from objects created after the user", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("SELECT * FROM t_created_after_user")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec("SELECT last_value FROM s_created_after_user")
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("Is not granted any CREATE privileges", func() {
+				connectionString := postgresEngine.URI(address, port, dbname, createdUser, createdPassword)
+				db, err := sql.Open("postgres", connectionString)
+				Expect(err).ToNot(HaveOccurred())
+				defer db.Close()
+
+				_, err = db.Exec("CREATE SCHEMA test123")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+
+				_, err = db.Exec("CREATE TABLE test456 AS SELECT 789 AS x")
+				Expect(err).To(MatchError(ContainSubstring(`permission`)))
+			})
+		})
 	})
 
 	Describe("DropUser", func() {
