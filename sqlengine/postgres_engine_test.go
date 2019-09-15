@@ -595,6 +595,8 @@ var _ = Describe("PostgresEngine", func() {
 				var err error
 				_, err = postgresEngine.db.Exec("CREATE TABLE t_created_before_user AS SELECT 123 AS x")
 				Expect(err).ToNot(HaveOccurred())
+				_, err = postgresEngine.db.Exec(`CREATE TABLE "t_weirdly "" ; ' ,named " AS SELECT 123 AS x`)
+				Expect(err).ToNot(HaveOccurred())
 				_, err = postgresEngine.db.Exec("CREATE SEQUENCE s_created_before_user")
 				Expect(err).ToNot(HaveOccurred())
 
@@ -606,6 +608,7 @@ var _ = Describe("PostgresEngine", func() {
 							{"target_type": "SCHEMA", "target_name": "public", "privilege": "ALL"},
 							{"target_type": "TABLE", "target_name": "t_created_before_user", "privilege": "SELECT"},
 							{"target_type": "TABLE", "target_name": "t_created_after_user", "privilege": "SELECT"},
+							{"target_type": "TABLE", "target_name": "t_weirdly \" ; ' ,named ", "privilege": "INSERT"},
 							{"target_type": "TABLE", "target_name": "doesnt_exist", "privilege": "ALL"},
 							{"target_type": "SEQUENCE", "target_name": "s_created_before_user", "privilege": "SELECT"},
 							{"target_type": "SEQUENCE", "target_name": "s_created_after_user", "privilege": "ALL"},
@@ -638,6 +641,9 @@ var _ = Describe("PostgresEngine", func() {
 				defer db.Close()
 
 				_, err = db.Exec("SELECT * FROM t_created_before_user")
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = db.Exec(`INSERT INTO "t_weirdly "" ; ' ,named " VALUES (555)`)
 				Expect(err).ToNot(HaveOccurred())
 
 				_, err = db.Exec("SELECT last_value FROM s_created_before_user")
