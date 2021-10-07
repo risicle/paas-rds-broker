@@ -90,11 +90,11 @@ func (d *MySQLEngine) CreateUser(bindingID, dbname string, readOnly bool) (usern
 		userRequireSSL = " REQUIRE SSL"
 	}
 
-	createUserStatement := "CREATE USER '" + username + "'@'%' IDENTIFIED BY '" + password + "'" + userRequireSSL + ";"
+	createUserStatement := "CREATE USER ?@? IDENTIFIED BY '" + password + "'" + userRequireSSL + ";"
 	sanitizedCreateUserStatement := "CREATE USER '" + username + "'@'%' IDENTIFIED BY 'REDACTED'" + userRequireSSL + ";"
 	d.logger.Debug("create-user", lager.Data{"statement": sanitizedCreateUserStatement})
 
-	if _, err := d.db.Exec(createUserStatement); err != nil {
+	if _, err := d.db.Exec(createUserStatement, username, "%"); err != nil {
 		d.logger.Error("sql-error", err)
 		return "", "", err
 	}
