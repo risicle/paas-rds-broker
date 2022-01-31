@@ -9,6 +9,7 @@ import (
 	"github.com/pivotal-cf/brokerapi/domain/apiresponses"
 	"net/http"
 	"reflect"
+	"github.com/Masterminds/semver"
 	"strconv"
 	"strings"
 	"time"
@@ -911,6 +912,32 @@ func (b *RDSBroker) LastOperation(
 				Description: fmt.Sprintf("DB Instance '%s' has pending modifications", b.dbInstanceIdentifier(instanceID)),
 			}
 			return lastOperationResponse, nil
+		}
+
+		servicePlan, ok := b.catalog.FindServicePlan(pollDetails.PlanID)
+		if !ok {
+			return brokerapi.LastOperation{State: brokerapi.Failed}, fmt.Errorf("Service Plan '%s' not found", pollDetails.PlanID)
+		}
+		rdsEngineVersion, err := semver.NewVersion(*dbInstance.EngineVersion)
+		if err != nil {
+			return brokerapi.LastOperation{State: brokerapi.Failed}, err
+		}
+		spEngineVersion, err := servicePlan.EngineVersion()
+		if err != nil {
+			return brokerapi.LastOperation{State: brokerapi.Failed}, err
+		}
+		if rdsEngineVersion.Major() != spEngineVersion.Major() {
+			awsTagsPlan, _ := tagsByName[awsrds.TagPlanID]
+			b.logger.Info("detected-engine-version-mismatch", lager.Data{
+				instanceIDLogKey: instanceID,
+				servicePlanLogKey: pollDetails.PlanID,
+				"rdsEngineVersion": *dbInstance.EngineVersion,
+				"awsTagsPlan": awsTagsPlan,
+			})
+			return brokerapi.LastOperation{State: brokerapi.Failed}, fmt.Errorf(
+				"Attempted plan upgrade appears to have failed. DB Instance remains at version '%s'. Please contact support.",
+				*dbInstance.EngineVersion,
+			)
 		}
 
 		asyncOperationTriggered, err := b.PostRestoreTasks(instanceID, dbInstance, tagsByName)
