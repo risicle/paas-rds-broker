@@ -2124,7 +2124,7 @@ var _ = Describe("RDS Broker", func() {
 				DBInstanceIdentifier: aws.String(dbInstanceIdentifier),
 				DBInstanceArn:        aws.String(dbInstanceArn),
 				Engine:               aws.String("test-engine"),
-				EngineVersion:        stringPointer("4.5.6"),
+				EngineVersion:        stringPointer("1.4.5"),
 				Endpoint: &rds.Endpoint{
 					Address: aws.String("endpoint-address"),
 					Port:    aws.Int64(3306),
