@@ -2309,7 +2309,7 @@ var _ = Describe("RDS Broker", func() {
 				lastOperationState = domain.InProgress
 			})
 
-			It("calls GetResourceTags() with the refresh cache option", func() {
+			It("calls GetResourceTags() without the use cached option", func() {
 				lastOperationResponse, err := rdsBroker.LastOperation(ctx, instanceID, pollDetails)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(lastOperationResponse).To(Equal(properLastOperationResponse))
@@ -2318,7 +2318,7 @@ var _ = Describe("RDS Broker", func() {
 				id, opts := rdsInstance.GetResourceTagsArgsForCall(0)
 				Expect(id).To(Equal(dbInstanceArn))
 
-				Expect(opts).To(ContainElement(awsrds.DescribeRefreshCacheOption))
+				Expect(opts).ToNot(ContainElement(awsrds.DescribeUseCachedOption))
 			})
 
 			It("returns the proper LastOperationResponse", func() {

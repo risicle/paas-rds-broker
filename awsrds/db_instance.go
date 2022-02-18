@@ -10,8 +10,8 @@ import (
 type DescribeOption string
 
 const (
-	// Should Describe* ops invalidate and refresh the cache
-	DescribeRefreshCacheOption DescribeOption = "refreshCache"
+	// Should Describe* ops use cached values
+	DescribeUseCachedOption DescribeOption = "useCached"
 )
 
 //go:generate counterfeiter -o fakes/fake_rds_instance.go . RDSInstance
